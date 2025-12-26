@@ -7,7 +7,7 @@ Interactive debugger for GitHub Actions. The connection information can sent to 
 ```yml
     steps:
     - name: SSH远程连接
-      uses: datout-git/debugger-action@main
+      uses: datout/debugger-action@main
 ```
 
 ## Acknowledgments
