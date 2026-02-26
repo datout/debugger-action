@@ -75,7 +75,7 @@ setup_web_terminal() {
       cf_url="https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-arm64"
       ;;
     *)
-      echo "::warning::Unsupported arch for web terminal: ${arch}" >&2
+      echo "::warning::Unsupported arch for web terminal: ${arch}"
       return 0
       ;;
   esac
@@ -84,36 +84,50 @@ setup_web_terminal() {
   # Do not fail the whole action if download fails; fallback to tmate only
   echo "Setting up passwordless Web terminal (ttyd + trycloudflare)..."
   if ! curl -fsSL --retry 3 --connect-timeout 15 "${ttyd_url}" -o "${TMATE_DIR}/ttyd"; then
-    echo "::warning::Failed to download ttyd, Web terminal disabled" >&2
+    echo "::warning::Failed to download ttyd, Web terminal disabled"
     return 0
   fi
   if ! curl -fsSL --retry 3 --connect-timeout 15 "${cf_url}" -o "${TMATE_DIR}/cloudflared"; then
-    echo "::warning::Failed to download cloudflared, Web terminal disabled" >&2
+    echo "::warning::Failed to download cloudflared, Web terminal disabled"
     return 0
   fi
   chmod +x "${TMATE_DIR}/ttyd" "${TMATE_DIR}/cloudflared" || true
 
   port="${WEB_TERMINAL_PORT:-7681}"
 
+  linebuf() {
+    if command -v stdbuf >/dev/null 2>&1; then
+      stdbuf -oL -eL "$@"
+    else
+      "$@"
+    fi
+  }
+
   # -o: Accept only one client and exit on disconnection (so "exit" ends this step, like tmate)
-  "${TMATE_DIR}/ttyd" -o -p "${port}" -i 127.0.0.1 -W \
+  linebuf "${TMATE_DIR}/ttyd" -o -p "${port}" -i 127.0.0.1 -W \
     bash -lc 'cd "'"${TMATE_SESSION_PATH}"'" 2>/dev/null || true; exec bash -l' \
     >"${TMATE_DIR}/ttyd.log" 2>&1 &
   TTYD_PID=$!
 
-  "${TMATE_DIR}/cloudflared" tunnel --url "http://127.0.0.1:${port}" --no-autoupdate \
+  linebuf "${TMATE_DIR}/cloudflared" tunnel --url "http://127.0.0.1:${port}" --no-autoupdate \
     >"${TMATE_DIR}/cloudflared.log" 2>&1 &
   CLOUDFLARED_PID=$!
 
   # Wait for public URL
   local i
-  for i in $(seq 1 60); do
-    WEB2_LINE="$(grep -oE 'https://[-0-9a-z]+\\.trycloudflare\\.com' "${TMATE_DIR}/cloudflared.log" | head -n 1 || true)"
+  for i in $(seq 1 120); do
+    WEB2_LINE="$(grep -oE 'https://[^ ]+\\.trycloudflare\\.com' "${TMATE_DIR}/cloudflared.log" | head -n 1 | tr -d '\\r' || true)"
+    # If cloudflared exited early, stop waiting
+    if [ -n "${CLOUDFLARED_PID:-}" ] && ! kill -0 "${CLOUDFLARED_PID}" 2>/dev/null; then
+      break
+    fi
     [ -n "${WEB2_LINE}" ] && break
     sleep 1
   done
   if [ -z "${WEB2_LINE}" ]; then
-    echo "::warning::Web terminal URL not found (trycloudflare). Use SSH instead." >&2
+    echo "::warning::Web2 URL not found (trycloudflare). Use SSH instead."
+    echo "::warning::cloudflared log (last 30 lines):"
+    tail -n 30 "${TMATE_DIR}/cloudflared.log" 2>/dev/null || true
     return 0
   fi
 
