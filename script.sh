@@ -105,7 +105,7 @@ setup_web_terminal() {
 
   # -o: Accept only one client and exit on disconnection (so "exit" ends this step, like tmate)
   linebuf "${TMATE_DIR}/ttyd" -o -p "${port}" -i 127.0.0.1 -W \
-    bash -lc 'cd "'"${TMATE_SESSION_PATH}"'" 2>/dev/null || true; exec bash -l' \
+    bash -lc 'cd "'"${TMATE_SESSION_PATH}"'" 2>/dev/null || true; trap "touch /tmp/remote_done" EXIT; bash -l' \
     >"${TMATE_DIR}/ttyd.log" 2>&1 &
   TTYD_PID=$!
 
@@ -116,12 +116,12 @@ setup_web_terminal() {
   # Wait for public URL
   local i
   for i in $(seq 1 120); do
-    WEB2_LINE="$(grep -oE 'https://[^ ]+\\.trycloudflare\\.com' "${TMATE_DIR}/cloudflared.log" | head -n 1 | tr -d '\\r' || true)"
+    WEB2_LINE="$(awk '/trycloudflare.com/{for(i=1;i<=NF;i++) if($i ~ /trycloudflare.com/) {print $i; exit}}' "${TMATE_DIR}/cloudflared.log" | tr -d '\r' || true)"
+    [ -n "${WEB2_LINE}" ] && break
     # If cloudflared exited early, stop waiting
     if [ -n "${CLOUDFLARED_PID:-}" ] && ! kill -0 "${CLOUDFLARED_PID}" 2>/dev/null; then
       break
     fi
-    [ -n "${WEB2_LINE}" ] && break
     sleep 1
   done
   if [ -z "${WEB2_LINE}" ]; then
@@ -241,10 +241,22 @@ echo ""
 display_int=${DISP_INTERVAL_SEC:=30}
 timecounter=0
 
-user_connected=0
+remote_done_file="/tmp/remote_done"
+rm -f "${remote_done_file}" 2>/dev/null || true
+ssh_attached_once=0
+web_attached_once=0
+web_port="${WEB_TERMINAL_PORT:-7681}"
+
 while true; do
+  # Web2 wrapper will create this file on shell exit
+  if [ -f "${remote_done_file}" ]; then
+    echo "Remote session marked done."
+    break
+  fi
+
   tmate_alive=0
   [ -S "${TMATE_SOCK}" ] && tmate_alive=1
+
   ttyd_alive=0
   if [ -n "${TTYD_PID:-}" ] && kill -0 "${TTYD_PID}" 2>/dev/null; then
     ttyd_alive=1
@@ -252,7 +264,7 @@ while true; do
 
   # Exit conditions:
   # - tmate session ended
-  # - or passwordless Web terminal ended (ttyd --once exits on disconnect)
+  # - or Web2 ended (ttyd -o exits on disconnect)
   if [ ${tmate_alive} -eq 0 ]; then
     break
   fi
@@ -260,15 +272,28 @@ while true; do
     echo "Web terminal session ended."
     break
   fi
-  connected=0
-  grep -qE '^[[:digit:]\.]+ A mate has joined' "${TMATE_SERVER_LOG}" && connected=1
-  if [ ${connected} -eq 1 ] && [ ${user_connected} -eq 0 ]; then
-    echo "你刚刚连接超时,现在已禁用"
-    user_connected=1
+
+  # Detect SSH attach/detach: connect then exit => continue
+  ssh_attached="$(tmate -S "${TMATE_SOCK}" display -p '#{session_attached}' 2>/dev/null || echo 0)"
+  ssh_attached="${ssh_attached:-0}"
+  if [ "${ssh_attached}" -gt 0 ] 2>/dev/null; then
+    ssh_attached_once=1
+  elif [ "${ssh_attached_once}" -eq 1 ]; then
+    echo "SSH session ended."
+    break
   fi
-  if [ ${user_connected} -ne 1 ]; then
+
+  # Best-effort: detect Web2 has an active connection to disable timeout while in use
+  if [ -n "${WEB2_LINE:-}" ] && [ ${web_attached_once} -eq 0 ]; then
+    if command -v ss >/dev/null 2>&1; then
+      ss -tn "sport = :${web_port}" 2>/dev/null | grep -q ESTAB && web_attached_once=1 || true
+    fi
+  fi
+
+  # Timeout if nobody connected within timeout
+  if [ ${ssh_attached_once} -eq 0 ] && [ ${web_attached_once} -eq 0 ]; then
     if (( timecounter > timeout )); then
-      echo "等待连接超时,现在跳过SSH此步骤"
+      echo "等待连接超时,现在跳过SSH/Web2此步骤"
       cleanup
 
       if [ "x$TIMEOUT_FAIL" = "x1" ] || [ "x$TIMEOUT_FAIL" = "xtrue" ]; then
@@ -288,11 +313,11 @@ while true; do
       echo -e " Web: \e[33m ${WEB_LINE} \e[0m"
       [ -n "${WEB2_LINE:-}" ] && echo -e " Web2: \e[33m ${WEB2_LINE} \e[0m"
       echo -e "\e[32m  \e[0m"
-      
-     [ "x${user_connected}" != "x1" ] && (
+
+     if [ ${ssh_attached_once} -eq 0 ] && [ ${web_attached_once} -eq 0 ]; then
        echo -e "\n如果您还不连接SSH/Web2，\e[31m将在\e[0m $(( timeout-timecounter )) 秒内自动跳过"
        echo "要立即跳过此步骤，只需连接SSH或Web2并正确退出即可"
-     )
+     fi
     echo ______________________________________________________________________________________________
   fi
 
