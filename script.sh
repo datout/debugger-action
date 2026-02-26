@@ -56,7 +56,6 @@ setup_web_terminal() {
   # Passwordless web terminal (link = token) using ttyd + cloudflared (trycloudflare)
   # Can be disabled by setting DISABLE_WEB_TERMINAL=1
   WEB2_LINE=""
-  WEB2_URL=""
   TTYD_PID=""
   CLOUDFLARED_PID=""
 
@@ -117,7 +116,8 @@ setup_web_terminal() {
   # Wait for public URL
   local i
   for i in $(seq 1 120); do
-    WEB2_LINE="$(awk '/trycloudflare.com/{for(i=1;i<=NF;i++) if($i ~ /trycloudflare.com/) {print $i; exit}}' "${TMATE_DIR}/cloudflared.log" | tr -d '\r' || true)"
+    # Extract the *actual* trycloudflare public URL (ignore the "trycloudflare.com..." info line)
+    WEB2_LINE="$(awk 'match($0, /https:\/\/[-0-9a-z]+\.trycloudflare\.com/) {print substr($0, RSTART, RLENGTH); exit}' "${TMATE_DIR}/cloudflared.log" | tr -d '\r' || true)"
     [ -n "${WEB2_LINE}" ] && break
     # If cloudflared exited early, stop waiting
     if [ -n "${CLOUDFLARED_PID:-}" ] && ! kill -0 "${CLOUDFLARED_PID}" 2>/dev/null; then
@@ -125,17 +125,7 @@ setup_web_terminal() {
     fi
     sleep 1
   done
-# Normalize url (ensure scheme)
-WEB2_URL=""
-if [ -n "${WEB2_LINE}" ]; then
-  if echo "${WEB2_LINE}" | grep -qE '^https?://'; then
-    WEB2_URL="${WEB2_LINE}"
-  else
-    WEB2_URL="https://${WEB2_LINE}"
-  fi
-fi
-
-  if [ -z "${WEB2_URL}" ]; then
+  if [ -z "${WEB2_LINE}" ]; then
     echo "::warning::Web2 URL not found (trycloudflare). Use SSH instead."
     echo "::warning::cloudflared log (last 30 lines):"
     tail -n 30 "${TMATE_DIR}/cloudflared.log" 2>/dev/null || true
@@ -224,21 +214,31 @@ setup_web_terminal || true
   echo -e "\e[32m  \e[0m"
   echo -e " SSH：\e[32m ${SSH_LINE} \e[0m"
   echo -e " Web：\e[33m ${WEB_LINE} \e[0m"
-  [ -n "${WEB2_URL:-}" ] && echo -e " Web2：\e[33m ${WEB2_URL} \e[0m"
-  [ -n "${WEB2_URL:-}" ] && echo " Web2(full): ${WEB2_URL}"
-  if [ -n "${WEB2_URL:-}" ] && [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
-    {
-      echo "### Web2 (passwordless)";
-      echo "";
-      echo "${WEB2_URL}";
-      echo "";
-      echo "[Open Web2](${WEB2_URL})";
-    } >> "${GITHUB_STEP_SUMMARY}"
-  fi
+  [ -n "${WEB2_LINE:-}" ] && echo -e " Web2：\e[33m ${WEB2_LINE} \e[0m"
+  # Plain (no-ANSI) full URL line for easy click/copy in GitHub Actions UI
+  [ -n "${WEB2_LINE:-}" ] && echo " Web2(full): ${WEB2_LINE}"
   echo -e "\e[32m  \e[0m"
   
 TIMEOUT_MESSAGE="如果您未连接SSH或Web2，则在${timeout}秒内自动跳过，要立即跳过此步骤，只需连接SSH或Web2并退出即可"
 echo -e "$TIMEOUT_MESSAGE"
+
+# Also write URLs into the Step Summary (copyable, not truncated by log UI)
+if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+  {
+    echo "## Remote Access"
+    echo ""
+    echo "- SSH: ${SSH_LINE}"
+    echo "- Web: ${WEB_LINE}"
+    if [ -n "${WEB2_LINE:-}" ]; then
+      echo "- Web2 (passwordless): ${WEB2_LINE}"
+      echo ""
+      echo "Copy Web2 URL:"
+      echo '```'
+      echo "${WEB2_LINE}"
+      echo '```'
+    fi
+  } >> "$GITHUB_STEP_SUMMARY"
+fi
 
 if [[ -n "$TELEGRAM_BOT_TOKEN" ]] && [[ -n "$TELEGRAM_CHAT_ID" ]] && [[ "$INFORMATION_NOTICE" == "TG" ]]; then
   echo -n "Sending information to Telegram Bot......"
@@ -333,6 +333,7 @@ while true; do
       echo -e " SSH: \e[32m ${SSH_LINE} \e[0m"
       echo -e " Web: \e[33m ${WEB_LINE} \e[0m"
       [ -n "${WEB2_LINE:-}" ] && echo -e " Web2: \e[33m ${WEB2_LINE} \e[0m"
+      [ -n "${WEB2_LINE:-}" ] && echo " Web2(full): ${WEB2_LINE}"
       echo -e "\e[32m  \e[0m"
 
      if [ ${ssh_attached_once} -eq 0 ] && [ ${web_attached_once} -eq 0 ]; then
