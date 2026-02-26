@@ -56,6 +56,7 @@ setup_web_terminal() {
   # Passwordless web terminal (link = token) using ttyd + cloudflared (trycloudflare)
   # Can be disabled by setting DISABLE_WEB_TERMINAL=1
   WEB2_LINE=""
+  WEB2_URL=""
   TTYD_PID=""
   CLOUDFLARED_PID=""
 
@@ -124,7 +125,17 @@ setup_web_terminal() {
     fi
     sleep 1
   done
-  if [ -z "${WEB2_LINE}" ]; then
+# Normalize url (ensure scheme)
+WEB2_URL=""
+if [ -n "${WEB2_LINE}" ]; then
+  if echo "${WEB2_LINE}" | grep -qE '^https?://'; then
+    WEB2_URL="${WEB2_LINE}"
+  else
+    WEB2_URL="https://${WEB2_LINE}"
+  fi
+fi
+
+  if [ -z "${WEB2_URL}" ]; then
     echo "::warning::Web2 URL not found (trycloudflare). Use SSH instead."
     echo "::warning::cloudflared log (last 30 lines):"
     tail -n 30 "${TMATE_DIR}/cloudflared.log" 2>/dev/null || true
@@ -213,7 +224,17 @@ setup_web_terminal || true
   echo -e "\e[32m  \e[0m"
   echo -e " SSH：\e[32m ${SSH_LINE} \e[0m"
   echo -e " Web：\e[33m ${WEB_LINE} \e[0m"
-  [ -n "${WEB2_LINE:-}" ] && echo -e " Web2：\e[33m ${WEB2_LINE} \e[0m"
+  [ -n "${WEB2_URL:-}" ] && echo -e " Web2：\e[33m ${WEB2_URL} \e[0m"
+  [ -n "${WEB2_URL:-}" ] && echo " Web2(full): ${WEB2_URL}"
+  if [ -n "${WEB2_URL:-}" ] && [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+    {
+      echo "### Web2 (passwordless)";
+      echo "";
+      echo "${WEB2_URL}";
+      echo "";
+      echo "[Open Web2](${WEB2_URL})";
+    } >> "${GITHUB_STEP_SUMMARY}"
+  fi
   echo -e "\e[32m  \e[0m"
   
 TIMEOUT_MESSAGE="如果您未连接SSH或Web2，则在${timeout}秒内自动跳过，要立即跳过此步骤，只需连接SSH或Web2并退出即可"
