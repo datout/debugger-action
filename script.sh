@@ -40,9 +40,84 @@ cleanup() {
     docker commit --message "Commit from safe-debugger-action" "${container_id}" "${TMATE_DOCKER_IMAGE_EXP}"
     docker rm -f "${container_id}" > /dev/null
   fi
+  # Cleanup web terminal processes if any
+  if [ -n "${CLOUDFLARED_PID:-}" ] && kill -0 "${CLOUDFLARED_PID}" 2>/dev/null; then
+    kill "${CLOUDFLARED_PID}" 2>/dev/null || true
+  fi
+  if [ -n "${TTYD_PID:-}" ] && kill -0 "${TTYD_PID}" 2>/dev/null; then
+    kill "${TTYD_PID}" 2>/dev/null || true
+  fi
   tmate -S "${TMATE_SOCK}" kill-server || true
   sed -i '/alias attach_docker/d' ~/.bashrc || true
   rm -rf "${TMATE_DIR}"
+}
+
+setup_web_terminal() {
+  # Passwordless web terminal (link = token) using ttyd + cloudflared (trycloudflare)
+  # Can be disabled by setting DISABLE_WEB_TERMINAL=1
+  WEB2_LINE=""
+  TTYD_PID=""
+  CLOUDFLARED_PID=""
+
+  if [ -n "${DISABLE_WEB_TERMINAL:-}" ] && [ "x${DISABLE_WEB_TERMINAL}" != "x0" ]; then
+    return 0
+  fi
+
+  local arch ttyd_url cf_url port
+  arch="$(uname -m)"
+  case "${arch}" in
+    x86_64)
+      ttyd_url="https://github.com/tsl0922/ttyd/releases/latest/download/ttyd.x86_64"
+      cf_url="https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64"
+      ;;
+    aarch64|arm64)
+      ttyd_url="https://github.com/tsl0922/ttyd/releases/latest/download/ttyd.aarch64"
+      cf_url="https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-arm64"
+      ;;
+    *)
+      echo "::warning::Unsupported arch for web terminal: ${arch}" >&2
+      return 0
+      ;;
+  esac
+
+  # Download binaries into TMATE_DIR to avoid polluting the system
+  # Do not fail the whole action if download fails; fallback to tmate only
+  echo "Setting up passwordless Web terminal (ttyd + trycloudflare)..."
+  if ! curl -fsSL --retry 3 --connect-timeout 15 "${ttyd_url}" -o "${TMATE_DIR}/ttyd"; then
+    echo "::warning::Failed to download ttyd, Web terminal disabled" >&2
+    return 0
+  fi
+  if ! curl -fsSL --retry 3 --connect-timeout 15 "${cf_url}" -o "${TMATE_DIR}/cloudflared"; then
+    echo "::warning::Failed to download cloudflared, Web terminal disabled" >&2
+    return 0
+  fi
+  chmod +x "${TMATE_DIR}/ttyd" "${TMATE_DIR}/cloudflared" || true
+
+  port="${WEB_TERMINAL_PORT:-7681}"
+
+  # -o: Accept only one client and exit on disconnection (so "exit" ends this step, like tmate)
+  "${TMATE_DIR}/ttyd" -o -p "${port}" -i 127.0.0.1 -W \
+    bash -lc 'cd "'"${TMATE_SESSION_PATH}"'" 2>/dev/null || true; exec bash -l' \
+    >"${TMATE_DIR}/ttyd.log" 2>&1 &
+  TTYD_PID=$!
+
+  "${TMATE_DIR}/cloudflared" tunnel --url "http://127.0.0.1:${port}" --no-autoupdate \
+    >"${TMATE_DIR}/cloudflared.log" 2>&1 &
+  CLOUDFLARED_PID=$!
+
+  # Wait for public URL
+  local i
+  for i in $(seq 1 60); do
+    WEB2_LINE="$(grep -oE 'https://[-0-9a-z]+\\.trycloudflare\\.com' "${TMATE_DIR}/cloudflared.log" | head -n 1 || true)"
+    [ -n "${WEB2_LINE}" ] && break
+    sleep 1
+  done
+  if [ -z "${WEB2_LINE}" ]; then
+    echo "::warning::Web terminal URL not found (trycloudflare). Use SSH instead." >&2
+    return 0
+  fi
+
+  return 0
 }
 
 if [[ -n "$SKIP_DEBUGGER" ]]; then
@@ -117,24 +192,30 @@ fi
 SSH_LINE="$(tmate -S "${TMATE_SOCK}" display -p '#{tmate_ssh}' |cut -d ' ' -f2)"
 WEB_LINE="$(tmate -S "${TMATE_SOCK}" display -p '#{tmate_web}')"
 
+# Optional passwordless Web terminal (ttyd + trycloudflare)
+setup_web_terminal || true
+
   MSG="SSH: ${SSH_LINE}\nWEB: ${WEB_LINE}"
   echo -e "\e[32m  \e[0m"
   echo -e " SSH：\e[32m ${SSH_LINE} \e[0m"
   echo -e " Web：\e[33m ${WEB_LINE} \e[0m"
+  [ -n "${WEB2_LINE:-}" ] && echo -e " Web2：\e[33m ${WEB2_LINE} \e[0m"
   echo -e "\e[32m  \e[0m"
   
-TIMEOUT_MESSAGE="如果您未连接SSH，则在${timeout}秒内自动跳过，要立即跳过此步骤，只需连接SSH并退出即可"
+TIMEOUT_MESSAGE="如果您未连接SSH或Web2，则在${timeout}秒内自动跳过，要立即跳过此步骤，只需连接SSH或Web2并退出即可"
 echo -e "$TIMEOUT_MESSAGE"
 
 if [[ -n "$TELEGRAM_BOT_TOKEN" ]] && [[ -n "$TELEGRAM_CHAT_ID" ]] && [[ "$INFORMATION_NOTICE" == "TG" ]]; then
   echo -n "Sending information to Telegram Bot......"
   curl -k --data chat_id="${TELEGRAM_CHAT_ID}" --data "text=  Web: ${WEB_LINE}
-  
+  Web2: ${WEB2_LINE}
+
   SSH: ${SSH_LINE}" "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage"
 elif [[ -n "$PUSH_PLUS_TOKEN" ]] && [[ "$INFORMATION_NOTICE" == "PUSH" ]]; then
   echo -n "Sending information to pushplus......"
   curl -k --data token=${PUSH_PLUS_TOKEN} --data title="SSH连接代码" --data "content=Web: ${WEB_LINE}
-  
+  Web2: ${WEB2_LINE}
+
   SSH: ${SSH_LINE}" "http://www.pushplus.plus/send"
 fi
 
@@ -147,7 +228,24 @@ display_int=${DISP_INTERVAL_SEC:=30}
 timecounter=0
 
 user_connected=0
-while [ -S "${TMATE_SOCK}" ]; do
+while true; do
+  tmate_alive=0
+  [ -S "${TMATE_SOCK}" ] && tmate_alive=1
+  ttyd_alive=0
+  if [ -n "${TTYD_PID:-}" ] && kill -0 "${TTYD_PID}" 2>/dev/null; then
+    ttyd_alive=1
+  fi
+
+  # Exit conditions:
+  # - tmate session ended
+  # - or passwordless Web terminal ended (ttyd --once exits on disconnect)
+  if [ ${tmate_alive} -eq 0 ]; then
+    break
+  fi
+  if [ -n "${WEB2_LINE:-}" ] && [ ${ttyd_alive} -eq 0 ]; then
+    echo "Web terminal session ended."
+    break
+  fi
   connected=0
   grep -qE '^[[:digit:]\.]+ A mate has joined' "${TMATE_SERVER_LOG}" && connected=1
   if [ ${connected} -eq 1 ] && [ ${user_connected} -eq 0 ]; then
@@ -169,16 +267,17 @@ while [ -S "${TMATE_SOCK}" ]; do
 
   if (( timecounter % display_int == 0 )); then
       echo "您可以使用SSH终端连接，或者使用网页直接连接"
-      echo "终端连接IP为SSH:后面的代码，网页连接直接点击Web后面的链接，然后以[ctrl+c]开始和[ctrl+d]结束"
+      echo "终端连接IP为SSH:后面的代码，网页连接可使用 Web 或 Web2 链接。Web2 为免密直连（链接即口令）"
       echo "命令：cd openwrt && make menuconfig"
       echo -e "\e[32m  \e[0m"
       echo -e " SSH: \e[32m ${SSH_LINE} \e[0m"
       echo -e " Web: \e[33m ${WEB_LINE} \e[0m"
+      [ -n "${WEB2_LINE:-}" ] && echo -e " Web2: \e[33m ${WEB2_LINE} \e[0m"
       echo -e "\e[32m  \e[0m"
       
      [ "x${user_connected}" != "x1" ] && (
-       echo -e "\n如果您还不连接SSH，\e[31m将在\e[0m $(( timeout-timecounter )) 秒内自动跳过"
-       echo "要立即跳过此步骤，只需连接SSH并正确退出即可"
+       echo -e "\n如果您还不连接SSH/Web2，\e[31m将在\e[0m $(( timeout-timecounter )) 秒内自动跳过"
+       echo "要立即跳过此步骤，只需连接SSH或Web2并正确退出即可"
      )
     echo ______________________________________________________________________________________________
   fi
