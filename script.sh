@@ -216,7 +216,6 @@ setup_web_terminal || true
   echo -e " Web：\e[33m ${WEB_LINE} \e[0m"
   [ -n "${WEB2_LINE:-}" ] && echo -e " Web2：\e[33m ${WEB2_LINE} \e[0m"
   # Plain (no-ANSI) full URL line for easy click/copy in GitHub Actions UI
-  [ -n "${WEB2_LINE:-}" ] && echo " Web2(full): ${WEB2_LINE}"
   echo -e "\e[32m  \e[0m"
   
 TIMEOUT_MESSAGE="如果您未连接SSH或Web2，则在${timeout}秒内自动跳过，要立即跳过此步骤，只需连接SSH或Web2并退出即可"
@@ -333,7 +332,6 @@ while true; do
       echo -e " SSH: \e[32m ${SSH_LINE} \e[0m"
       echo -e " Web: \e[33m ${WEB_LINE} \e[0m"
       [ -n "${WEB2_LINE:-}" ] && echo -e " Web2: \e[33m ${WEB2_LINE} \e[0m"
-      [ -n "${WEB2_LINE:-}" ] && echo " Web2(full): ${WEB2_LINE}"
       echo -e "\e[32m  \e[0m"
 
      if [ ${ssh_attached_once} -eq 0 ] && [ ${web_attached_once} -eq 0 ]; then
