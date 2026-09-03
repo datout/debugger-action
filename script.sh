@@ -86,7 +86,7 @@ setup_web_terminal() {
       ;;
   esac
 
-  echo "Setting up Web2 first (ttyd + trycloudflare)..."
+  echo "Web2 主连接：初始化..."
   if ! curl -fsSL --retry 3 --connect-timeout 15 "${ttyd_url}" -o "${TMATE_DIR}/ttyd"; then
     echo "::warning::Failed to download ttyd, Web2 disabled"
     return 0
@@ -127,11 +127,11 @@ setup_web_terminal() {
   done
 
   if [ -z "${WEB2_LINE}" ]; then
-    echo "::warning::Web2 URL not found (trycloudflare). Will try tmate."
+    echo "::warning::Web2 主连接不可用，将尝试 tmate 备用连接"
     echo "::warning::cloudflared log (last 30 lines):"
     tail -n 30 "${TMATE_DIR}/cloudflared.log" 2>/dev/null || true
   else
-    echo "Web2 ready: ${WEB2_LINE}"
+    echo "Web2 主连接：已就绪 ${WEB2_LINE}"
   fi
 }
 
@@ -140,22 +140,25 @@ notify_web2_first() {
 
   if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
     {
-      echo "## Remote Access"
+      echo "## 远程终端"
       echo ""
-      echo "- Web2 (primary, passwordless): ${WEB2_LINE}"
+      echo "- **Web2（主）**: ${WEB2_LINE}"
+      echo '- **命令**: `cd openwrt && make menuconfig`'
     } >> "${GITHUB_STEP_SUMMARY}"
   fi
 
   if [[ -n "${TELEGRAM_BOT_TOKEN:-}" ]] && [[ -n "${TELEGRAM_CHAT_ID:-}" ]] && [[ "${INFORMATION_NOTICE:-}" == "TG" ]]; then
-    echo -n "Sending Web2 information to Telegram Bot......"
+    echo -n "发送 Web2 到 Telegram..."
     curl -ksS --data chat_id="${TELEGRAM_CHAT_ID}" \
-      --data "text=Web2 已就绪（主连接）: ${WEB2_LINE}" \
+      --data "text=🖥 远程终端已就绪
+Web2：${WEB2_LINE}
+命令：cd openwrt && make menuconfig" \
       "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" >/dev/null || true
     echo "done"
   elif [[ -n "${PUSH_PLUS_TOKEN:-}" ]] && [[ "${INFORMATION_NOTICE:-}" == "PUSH" ]]; then
     echo -n "Sending Web2 information to pushplus......"
     curl -ksS --data token="${PUSH_PLUS_TOKEN}" --data title="Web2连接地址" \
-      --data "content=Web2: ${WEB2_LINE}" "http://www.pushplus.plus/send" >/dev/null || true
+      --data "content=Web2: ${WEB2_LINE}<br>命令: cd openwrt && make menuconfig" "http://www.pushplus.plus/send" >/dev/null || true
     echo "done"
   fi
 }
@@ -165,21 +168,24 @@ notify_tmate_optional() {
 
   if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
     {
-      echo "- SSH (tmate, optional): ${SSH_LINE}"
-      echo "- Web (tmate, optional): ${WEB_LINE}"
+      echo "- **SSH（备用）**: ${SSH_LINE}"
+      echo "- **Web（备用）**: ${WEB_LINE}"
     } >> "${GITHUB_STEP_SUMMARY}"
   fi
 
   if [[ -n "${TELEGRAM_BOT_TOKEN:-}" ]] && [[ -n "${TELEGRAM_CHAT_ID:-}" ]] && [[ "${INFORMATION_NOTICE:-}" == "TG" ]]; then
-    echo -n "Sending optional tmate information to Telegram Bot......"
+    echo -n "发送 tmate 备用连接到 Telegram..."
     curl -ksS --data chat_id="${TELEGRAM_CHAT_ID}" \
-      --data "text=tmate 备用连接已就绪\nSSH: ${SSH_LINE}\nWeb: ${WEB_LINE}" \
+      --data "text=🔐 备用连接
+SSH：${SSH_LINE}
+Web：${WEB_LINE}
+命令：cd openwrt && make menuconfig" \
       "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" >/dev/null || true
     echo "done"
   elif [[ -n "${PUSH_PLUS_TOKEN:-}" ]] && [[ "${INFORMATION_NOTICE:-}" == "PUSH" ]]; then
     echo -n "Sending optional tmate information to pushplus......"
     curl -ksS --data token="${PUSH_PLUS_TOKEN}" --data title="tmate备用连接" \
-      --data "content=SSH: ${SSH_LINE}<br>Web: ${WEB_LINE}" "http://www.pushplus.plus/send" >/dev/null || true
+      --data "content=SSH: ${SSH_LINE}<br>Web: ${WEB_LINE}<br>命令: cd openwrt && make menuconfig" "http://www.pushplus.plus/send" >/dev/null || true
     echo "done"
   fi
 }
@@ -203,7 +209,7 @@ setup_web_terminal || true
 notify_web2_first || true
 
 # 2) tmate is now optional. Never let it block Web2 or the build indefinitely.
-echo "Setting up optional tmate SSH/Web access..."
+echo "tmate 备用连接：初始化..."
 TMATE_INSTALL_OK=1
 if [ -n "${DISABLE_TMATE:-}" ] && [ "x${DISABLE_TMATE}" != "x0" ]; then
   TMATE_INSTALL_OK=0
@@ -227,7 +233,7 @@ fi
 
 if [ "${TMATE_INSTALL_OK}" -eq 1 ] && command -v tmate >/dev/null 2>&1; then
   [ -e ~/.ssh/id_rsa ] || ssh-keygen -t rsa -f ~/.ssh/id_rsa -q -N "" || true
-  echo "Running optional tmate..."
+  echo "tmate 备用连接：连接中..."
 
   if [ -n "${TMATE_DOCKER_IMAGE:-}" ] || [ -n "${TMATE_DOCKER_CONTAINER:-}" ]; then
     if [ -n "${TMATE_DOCKER_CONTAINER:-}" ]; then
@@ -264,12 +270,12 @@ if [ "${TMATE_INSTALL_OK}" -eq 1 ] && command -v tmate >/dev/null 2>&1; then
     TMATE_READY=1
     SSH_LINE="$(tmate -S "${TMATE_SOCK}" display -p '#{tmate_ssh}' 2>/dev/null | cut -d ' ' -f2 || true)"
     WEB_LINE="$(tmate -S "${TMATE_SOCK}" display -p '#{tmate_web}' 2>/dev/null || true)"
-    echo "tmate ready."
+    echo "tmate 备用连接：已就绪"
     [ -n "${SSH_LINE}" ] && echo -e " SSH：\e[32m ${SSH_LINE} \e[0m"
     [ -n "${WEB_LINE}" ] && echo -e " Web：\e[33m ${WEB_LINE} \e[0m"
     notify_tmate_optional || true
   else
-    echo "::warning::tmate did not become ready within ${TMATE_READY_TIMEOUT_SEC:-60}s; continuing with Web2 only"
+    echo "::warning::tmate 备用连接 ${TMATE_READY_TIMEOUT_SEC:-60}s 内未就绪，继续使用 Web2"
     if [ -S "${TMATE_SOCK}" ]; then
       tmate -S "${TMATE_SOCK}" kill-server 2>/dev/null || true
     fi
@@ -284,17 +290,16 @@ if [ -z "${WEB2_LINE:-}" ] && [ "${TMATE_READY}" -ne 1 ]; then
 fi
 
 echo ""
-echo "______________________________________________________________________________________________"
-echo "远程调试已就绪。Web2 为主连接，tmate SSH/Web 为可选备用。"
-echo "命令：cd openwrt && make menuconfig"
-[ -n "${WEB2_LINE:-}" ] && echo -e " Web2：\e[33m ${WEB2_LINE} \e[0m"
-[ -n "${SSH_LINE:-}" ] && echo -e " SSH：\e[32m ${SSH_LINE} \e[0m"
-[ -n "${WEB_LINE:-}" ] && echo -e " Web：\e[33m ${WEB_LINE} \e[0m"
-echo "如果未连接，将在 ${timeout} 秒后自动跳过；连接后正确 exit 即结束此步骤。"
-echo "______________________________________________________________________________________________"
+echo "=========================== 远程终端 ==========================="
+[ -n "${WEB2_LINE:-}" ] && echo -e " Web2  : \e[33m${WEB2_LINE}\e[0m"
+[ -n "${SSH_LINE:-}" ] && echo -e " SSH   : \e[32m${SSH_LINE}\e[0m  (备用)"
+[ -n "${WEB_LINE:-}" ] && echo -e " Web   : \e[33m${WEB_LINE}\e[0m  (备用)"
+echo " 命令  : cd openwrt && make menuconfig"
+echo " 等待  : ${TIMEOUT_MIN} 分钟（连接后 exit 继续编译）"
+echo "================================================================"
 
 # Wait for Web2 or tmate session to finish, or for the idle timeout.
-display_int=${DISP_INTERVAL_SEC:=30}
+display_int=${DISP_INTERVAL_SEC:=300}
 timecounter=0
 ssh_attached_once=0
 web_attached_once=0
@@ -356,17 +361,12 @@ while true; do
     fi
   fi
 
-  if (( timecounter % display_int == 0 )); then
-    echo "您可以优先使用 Web2 网页终端；tmate 成功时也可使用 SSH/Web。"
-    echo "命令：cd openwrt && make menuconfig"
-    [ -n "${WEB2_LINE:-}" ] && echo -e " Web2: \e[33m ${WEB2_LINE} \e[0m"
-    [ -n "${SSH_LINE:-}" ] && echo -e " SSH: \e[32m ${SSH_LINE} \e[0m"
-    [ -n "${WEB_LINE:-}" ] && echo -e " Web: \e[33m ${WEB_LINE} \e[0m"
+  if (( timecounter > 0 && timecounter % display_int == 0 )); then
     if [ ${ssh_attached_once} -eq 0 ] && [ ${web_attached_once} -eq 0 ]; then
-      echo -e "\n如果还未连接，将在 $(( timeout-timecounter )) 秒内自动跳过"
-      echo "连接 Web2 或 SSH 后正确 exit 即可继续编译"
+      remaining=$(( timeout - timecounter ))
+      [ ${remaining} -lt 0 ] && remaining=0
+      echo "等待远程连接... 剩余 $(( (remaining + 59) / 60 )) 分钟"
     fi
-    echo "______________________________________________________________________________________________"
   fi
 
   sleep 1
