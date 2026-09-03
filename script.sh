@@ -132,6 +132,7 @@ setup_web_terminal() {
     tail -n 30 "${TMATE_DIR}/cloudflared.log" 2>/dev/null || true
   else
     echo "Web2 主连接：已就绪 ${WEB2_LINE}"
+    echo "命令：cd openwrt && make menuconfig"
   fi
 }
 
