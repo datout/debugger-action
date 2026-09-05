@@ -151,7 +151,7 @@ notify_web2_first() {
   if [[ -n "${TELEGRAM_BOT_TOKEN:-}" ]] && [[ -n "${TELEGRAM_CHAT_ID:-}" ]] && [[ "${INFORMATION_NOTICE:-}" == "TG" ]]; then
     echo -n "发送 Web2 到 Telegram..."
     curl -ksS --data chat_id="${TELEGRAM_CHAT_ID}" \
-      --data "text=🖥 远程终端已就绪
+      --data-urlencode "text=🖥 远程终端已就绪
 Web2：${WEB2_LINE}
 命令：cd openwrt && make menuconfig" \
       "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" >/dev/null || true
@@ -159,7 +159,7 @@ Web2：${WEB2_LINE}
   elif [[ -n "${PUSH_PLUS_TOKEN:-}" ]] && [[ "${INFORMATION_NOTICE:-}" == "PUSH" ]]; then
     echo -n "Sending Web2 information to pushplus......"
     curl -ksS --data token="${PUSH_PLUS_TOKEN}" --data title="Web2连接地址" \
-      --data "content=Web2: ${WEB2_LINE}<br>命令: cd openwrt && make menuconfig" "http://www.pushplus.plus/send" >/dev/null || true
+      --data-urlencode "content=Web2: ${WEB2_LINE}<br>命令: cd openwrt && make menuconfig" "http://www.pushplus.plus/send" >/dev/null || true
     echo "done"
   fi
 }
@@ -177,7 +177,7 @@ notify_tmate_optional() {
   if [[ -n "${TELEGRAM_BOT_TOKEN:-}" ]] && [[ -n "${TELEGRAM_CHAT_ID:-}" ]] && [[ "${INFORMATION_NOTICE:-}" == "TG" ]]; then
     echo -n "发送 tmate 备用连接到 Telegram..."
     curl -ksS --data chat_id="${TELEGRAM_CHAT_ID}" \
-      --data "text=🔐 备用连接
+      --data-urlencode "text=🔐 备用连接
 SSH：${SSH_LINE}
 Web：${WEB_LINE}
 命令：cd openwrt && make menuconfig" \
@@ -186,7 +186,7 @@ Web：${WEB_LINE}
   elif [[ -n "${PUSH_PLUS_TOKEN:-}" ]] && [[ "${INFORMATION_NOTICE:-}" == "PUSH" ]]; then
     echo -n "Sending optional tmate information to pushplus......"
     curl -ksS --data token="${PUSH_PLUS_TOKEN}" --data title="tmate备用连接" \
-      --data "content=SSH: ${SSH_LINE}<br>Web: ${WEB_LINE}<br>命令: cd openwrt && make menuconfig" "http://www.pushplus.plus/send" >/dev/null || true
+      --data-urlencode "content=SSH: ${SSH_LINE}<br>Web: ${WEB_LINE}<br>命令: cd openwrt && make menuconfig" "http://www.pushplus.plus/send" >/dev/null || true
     echo "done"
   fi
 }
